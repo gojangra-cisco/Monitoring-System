@@ -1,0 +1,27 @@
+{
+  "name": "agent",
+  "version": "1.0.0",
+  "description": "Kubernetes Pod Monitoring Agent",
+  "main": "index.js",
+  "bin": {
+    "agent-monitor": "./index.js"
+  },
+  "scripts": {
+    "start": "node index.js",
+    "build": "pkg . --output bin/agent-monitor"
+  },
+  "keywords": ["kubernetes", "monitoring", "agent"],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "axios": "^1.13.1",
+    "dotenv": "^16.3.1"
+  },
+  "devDependencies": {
+    "pkg": "^5.8.1"
+  },
+  "pkg": {
+    "targets": ["node18-macos-x64", "node18-linux-x64", "node18-win-x64"],
+    "outputPath": "bin"
+  }
+}
