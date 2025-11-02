@@ -1,0 +1,12 @@
+{
+  "name": "test",
+  "version": "1.0.0",
+  "description": "Kubernetes Pod Simulation for Testing",
+  "main": "index.js",
+  "scripts": {
+    "simulate": "node simulatePods.js"
+  },
+  "keywords": ["kubernetes", "testing", "simulation"],
+  "author": "",
+  "license": "ISC"
+}
