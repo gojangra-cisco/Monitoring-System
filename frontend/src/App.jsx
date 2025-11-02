@@ -284,51 +284,54 @@ function App() {
                   </div>
                 ) : (
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    {pods.map((pod) => (
-                      <div
-                        key={pod.id}
-                        onClick={() => handlePodClick(pod)}
-                        className={`relative p-4 rounded-lg border-2 cursor-pointer transition-all hover:shadow-lg ${
-                          pod.status === 'running'
-                            ? 'bg-gray-750 border-green-500 hover:border-green-400'
-                            : 'bg-gray-750 border-red-500 hover:border-red-400'
-                        }`}
-                      >
-                        <div className="flex items-start justify-between">
-                          <div className="flex-1">
-                            <div className="flex items-center space-x-2 mb-2">
-                              {pod.status === 'running' ? (
-                                <svg className="w-6 h-6 text-green-400" fill="currentColor" viewBox="0 0 20 20">
-                                  <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
-                                </svg>
-                              ) : (
-                                <svg className="w-6 h-6 text-red-400" fill="currentColor" viewBox="0 0 20 20">
-                                  <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
-                                </svg>
-                              )}
-                              <h3 className="font-semibold text-lg">{pod.name}</h3>
-                            </div>
-                            <div className="flex items-center space-x-3 text-sm">
-                              <span className={`px-2 py-1 rounded text-xs font-medium ${
-                                pod.status === 'running'
-                                  ? 'bg-green-500 bg-opacity-20 text-green-300'
-                                  : 'bg-red-500 bg-opacity-20 text-red-300'
-                              }`}>
-                                {pod.status.toUpperCase()}
-                              </span>
-                              {pod.error_count > 0 && (
-                                <span className="px-2 py-1 rounded text-xs font-medium bg-yellow-500 bg-opacity-20 text-yellow-300">
-                                  {pod.error_count} errors
+                    {pods.map((pod) => {
+                      const isError = ['Failed', 'CrashLoopBackOff', 'OOMKilled', 'ImagePullBackOff', 'Error', 'Terminated', 'Unknown'].includes(pod.status);
+                      return (
+                        <div
+                          key={pod.id}
+                          onClick={() => handlePodClick(pod)}
+                          className={`relative p-4 rounded-lg border-2 cursor-pointer transition-all hover:shadow-lg ${
+                            isError
+                              ? 'bg-gray-750 border-red-500 hover:border-red-400'
+                              : 'bg-gray-750 border-green-500 hover:border-green-400'
+                          }`}
+                        >
+                          <div className="flex items-start justify-between">
+                            <div className="flex-1">
+                              <div className="flex items-center space-x-2 mb-2">
+                                {!isError ? (
+                                  <svg className="w-6 h-6 text-green-400" fill="currentColor" viewBox="0 0 20 20">
+                                    <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+                                  </svg>
+                                ) : (
+                                  <svg className="w-6 h-6 text-red-400" fill="currentColor" viewBox="0 0 20 20">
+                                    <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
+                                  </svg>
+                                )}
+                                <h3 className="font-semibold text-lg">{pod.name}</h3>
+                              </div>
+                              <div className="flex items-center space-x-3 text-sm">
+                                <span className={`px-2 py-1 rounded text-xs font-medium ${
+                                  isError
+                                    ? 'bg-red-500 bg-opacity-20 text-red-300'
+                                    : 'bg-green-500 bg-opacity-20 text-green-300'
+                                }`}>
+                                  {pod.status.toUpperCase()}
                                 </span>
-                              )}
+                                {pod.error_count > 0 && (
+                                  <span className="px-2 py-1 rounded text-xs font-medium bg-yellow-500 bg-opacity-20 text-yellow-300">
+                                    {pod.error_count} errors
+                                  </span>
+                                )}
+                              </div>
+                              <p className="text-xs text-gray-400 mt-2">
+                                Last check: {formatTimestamp(pod.last_check)}
+                              </p>
                             </div>
-                            <p className="text-xs text-gray-400 mt-2">
-                              Last check: {formatTimestamp(pod.last_check)}
-                            </p>
                           </div>
                         </div>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 )}
               </div>

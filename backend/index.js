@@ -36,12 +36,65 @@ app.post('/api/agent/update', async (req, res) => {
   }
 
   try {
-    // Get or create namespace
-    const [nsRows] = await db.query(
-      'INSERT INTO namespaces (name) VALUES (?) ON DUPLICATE KEY UPDATE id=LAST_INSERT_ID(id)',
+    // Check if namespace exists
+    const [existingNs] = await db.query(
+      'SELECT id FROM namespaces WHERE name = ?',
       [namespace]
     );
-    const namespaceId = nsRows.insertId;
+
+    // If no pods and namespace exists, it means namespace was deleted - remove it
+    if (pods.length === 0 && existingNs.length > 0) {
+      const namespaceId = existingNs[0].id;
+      
+      console.log(`🗑️  Namespace ${namespace} has no pods, removing from database...`);
+      
+      // Delete errors for all pods in this namespace
+      await db.query(`
+        DELETE e FROM errors e
+        JOIN pods p ON e.pod_id = p.id
+        WHERE p.namespace_id = ?
+      `, [namespaceId]);
+
+      // Delete all pods in this namespace
+      await db.query('DELETE FROM pods WHERE namespace_id = ?', [namespaceId]);
+
+      // Delete the namespace
+      await db.query('DELETE FROM namespaces WHERE id = ?', [namespaceId]);
+
+      return res.json({ success: true, message: 'Namespace removed (no pods found)' });
+    }
+
+    // If no pods and namespace doesn't exist, nothing to do
+    if (pods.length === 0) {
+      return res.json({ success: true, message: 'No pods to update' });
+    }
+
+    // Get or create namespace (only if we have pods)
+    const [nsRows] = await db.query(
+      'INSERT INTO namespaces (name) VALUES (?) ON DUPLICATE KEY UPDATE id=LAST_INSERT_ID(id), updated_at=NOW()',
+      [namespace]
+    );
+    const namespaceId = nsRows.insertId || existingNs[0].id;
+
+    // Get current pods in database for this namespace
+    const [currentPods] = await db.query(
+      'SELECT name FROM pods WHERE namespace_id = ?',
+      [namespaceId]
+    );
+    
+    const currentPodNames = new Set(currentPods.map(p => p.name));
+    const newPodNames = new Set(pods.map(p => p.name));
+    
+    // Delete pods that no longer exist in Kubernetes
+    for (const podName of currentPodNames) {
+      if (!newPodNames.has(podName)) {
+        console.log(`🗑️  Removing deleted pod: ${podName}`);
+        await db.query(
+          'DELETE FROM pods WHERE name = ? AND namespace_id = ?',
+          [podName, namespaceId]
+        );
+      }
+    }
 
     // Process each pod
     for (const pod of pods) {
@@ -157,8 +210,8 @@ app.get('/api/dashboard/stats', async (req, res) => {
       SELECT 
         COUNT(DISTINCT n.id) as total_namespaces,
         COUNT(DISTINCT p.id) as total_pods,
-        SUM(CASE WHEN p.status = 'running' THEN 1 ELSE 0 END) as running_pods,
-        SUM(CASE WHEN p.status = 'error' THEN 1 ELSE 0 END) as error_pods,
+        SUM(CASE WHEN p.status NOT IN ('error', 'Failed', 'CrashLoopBackOff', 'OOMKilled') THEN 1 ELSE 0 END) as running_pods,
+        SUM(CASE WHEN p.status IN ('error', 'Failed', 'CrashLoopBackOff', 'OOMKilled') THEN 1 ELSE 0 END) as error_pods,
         COUNT(DISTINCT e.id) as total_errors_today
       FROM namespaces n
       LEFT JOIN pods p ON n.id = p.namespace_id
@@ -167,6 +220,44 @@ app.get('/api/dashboard/stats', async (req, res) => {
     res.json(stats[0]);
   } catch (error) {
     console.error('Error fetching stats:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+/**
+ * DELETE /api/namespaces/:name
+ * Deletes a namespace and all associated pods/errors
+ */
+app.delete('/api/namespaces/:name', async (req, res) => {
+  const { name } = req.params;
+
+  try {
+    // Get namespace ID
+    const [nsRows] = await db.query('SELECT id FROM namespaces WHERE name = ?', [name]);
+    
+    if (nsRows.length === 0) {
+      return res.json({ success: true, message: 'Namespace not found (already deleted)' });
+    }
+
+    const namespaceId = nsRows[0].id;
+
+    // Delete errors for all pods in this namespace (cascade handled by FK)
+    await db.query(`
+      DELETE e FROM errors e
+      JOIN pods p ON e.pod_id = p.id
+      WHERE p.namespace_id = ?
+    `, [namespaceId]);
+
+    // Delete all pods in this namespace
+    await db.query('DELETE FROM pods WHERE namespace_id = ?', [namespaceId]);
+
+    // Delete the namespace
+    await db.query('DELETE FROM namespaces WHERE id = ?', [namespaceId]);
+
+    console.log(`🗑️  Deleted namespace: ${name}`);
+    res.json({ success: true, message: 'Namespace deleted successfully' });
+  } catch (error) {
+    console.error('Error deleting namespace:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 });

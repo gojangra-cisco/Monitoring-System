@@ -100,20 +100,64 @@ class K8sSimulator {
   }
 
   /**
-   * Create a pod with a simple container that sleeps
+   * Create a pod with a simple container that generates logs with errors
+   * Randomly creates some pods that will fail intentionally
    */
   async createPod(podName) {
-    const podYaml = `
-apiVersion: v1
+    // 30% chance to create a failing pod
+    const shouldFail = Math.random() < 0.3;
+    
+    let podYaml;
+    
+    if (shouldFail) {
+      // Create a pod that will crash randomly
+      const crashType = Math.floor(Math.random() * 3);
+      let crashCommand;
+      
+      if (crashType === 0) {
+        // Pod that exits with error code after a few logs
+        crashCommand = `
+      echo "$(date) - [INFO] Starting application..."
+      sleep 2
+      echo "$(date) - [INFO] Initializing components..."
+      sleep 3
+      echo "$(date) - Error: Fatal error occurred!"
+      echo "$(date) - CrashLoopBackOff: Application crashed"
+      exit 1`;
+      } else if (crashType === 1) {
+        // Pod that runs for a bit then crashes in a loop
+        crashCommand = `
+      while true; do
+        echo "$(date) - [INFO] Application started"
+        sleep $((RANDOM % 10 + 5))
+        echo "$(date) - Error: Unexpected error occurred"
+        echo "$(date) - Failed: Service crashed"
+        exit 137`;
+      } else {
+        // Pod that immediately fails
+        crashCommand = `
+      echo "$(date) - Error: Failed to initialize"
+      echo "$(date) - FATAL: Cannot start application"
+      exit 1`;
+      }
+      
+      podYaml = `apiVersion: v1
 kind: Pod
 metadata:
   name: ${podName}
   namespace: ${this.namespace}
+  labels:
+    app: ${podName}
+    status: failing
 spec:
+  restartPolicy: Always
   containers:
   - name: app
     image: busybox:latest
-    command: ['sh', '-c', 'while true; do echo "$(date) - [INFO] Application running"; sleep 5; done']
+    command:
+    - sh
+    - -c
+    - |${crashCommand}
     resources:
       requests:
         memory: "64Mi"
@@ -122,12 +166,69 @@ spec:
         memory: "128Mi"
         cpu: "200m"
 `;
+      console.log(`⚠️  Creating FAILING pod '${podName}' (will crash)...`);
+    } else {
+      // Create a normal running pod with occasional error logs
+      podYaml = `apiVersion: v1
+kind: Pod
+metadata:
+  name: ${podName}
+  namespace: ${this.namespace}
+  labels:
+    app: ${podName}
+    status: running
+spec:
+  containers:
+  - name: app
+    image: busybox:latest
+    command:
+    - sh
+    - -c
+    - |
+      while true; do
+        RAND=$((RANDOM % 100))
+        if [ $RAND -lt 15 ]; then
+          case $((RANDOM % 9)) in
+            0) echo "$(date) - Error: failed to connect to database" ;;
+            1) echo "$(date) - FATAL: connection timeout after 30s" ;;
+            2) echo "$(date) - OOMKilled: container exceeded memory limit" ;;
+            3) echo "$(date) - CrashLoopBackOff: container exited with code 1" ;;
+            4) echo "$(date) - Failed to pull image: timeout" ;;
+            5) echo "$(date) - Exception in thread main java.lang.NullPointerException" ;;
+            6) echo "$(date) - Error: ECONNREFUSED - Connection refused" ;;
+            7) echo "$(date) - Crash detected: segmentation fault" ;;
+            8) echo "$(date) - Failed to start application: port already in use" ;;
+          esac
+        else
+          case $((RANDOM % 9)) in
+            0) echo "$(date) - [INFO] Application started successfully" ;;
+            1) echo "$(date) - [INFO] Processing request" ;;
+            2) echo "$(date) - [INFO] Database connection established" ;;
+            3) echo "$(date) - [INFO] Health check passed" ;;
+            4) echo "$(date) - [DEBUG] Cache hit for key" ;;
+            5) echo "$(date) - [INFO] Request completed successfully" ;;
+            6) echo "$(date) - [INFO] Scheduled task executed" ;;
+            7) echo "$(date) - [DEBUG] Loading configuration" ;;
+            8) echo "$(date) - [INFO] Service running normally" ;;
+          esac
+        fi
+        sleep 3
+      done
+    resources:
+      requests:
+        memory: "64Mi"
+        cpu: "100m"
+      limits:
+        memory: "128Mi"
+        cpu: "200m"
+`;
+      console.log(`✅ Creating RUNNING pod '${podName}' (will run normally)...`);
+    }
 
     const yamlFile = path.join(__dirname, `${podName}.yaml`);
     
     try {
       await fs.writeFile(yamlFile, podYaml);
-      console.log(`🔨 Creating pod '${podName}'...`);
       await execPromise(`kubectl apply -f ${yamlFile}`);
       
       // Wait a bit for pod to start
@@ -136,12 +237,13 @@ spec:
       // Clean up yaml file
       await fs.unlink(yamlFile);
       
-      console.log(`✅ Pod '${podName}' created`);
+      console.log(`📦 Pod '${podName}' created${shouldFail ? ' (will show errors)' : ''}`);
       
       // Initialize pod state
       this.podStates[podName] = {
-        errorProbability: 0.15, // 15% chance of error per log entry
-        consecutiveErrors: 0
+        errorProbability: shouldFail ? 1.0 : 0.15,
+        consecutiveErrors: 0,
+        shouldFail: shouldFail
       };
     } catch (error) {
       console.error(`❌ Error creating pod ${podName}:`, error.message);
@@ -159,73 +261,6 @@ spec:
     for (const podName of POD_NAMES) {
       await this.createPod(podName);
     }
-  }
-
-  /**
-   * Append logs to a pod by writing to it
-   */
-  async appendLogToPod(podName) {
-    const state = this.podStates[podName];
-    const shouldError = Math.random() < state.errorProbability;
-    
-    let message;
-    let command;
-
-    if (shouldError) {
-      // Inject an error message
-      message = ERROR_MESSAGES[Math.floor(Math.random() * ERROR_MESSAGES.length)];
-      state.consecutiveErrors++;
-      
-      // If too many consecutive errors, simulate pod crash
-      if (state.consecutiveErrors >= 3) {
-        console.log(`💥 Pod ${podName} simulating crash...`);
-        try {
-          // Delete and recreate pod to simulate crash
-          await execPromise(`kubectl delete pod ${podName} -n ${this.namespace} --grace-period=0 --force`);
-          await this.sleep(1000);
-          await this.createPod(podName);
-          state.consecutiveErrors = 0;
-        } catch (error) {
-          console.error(`Error simulating crash for ${podName}:`, error.message);
-        }
-        return;
-      }
-    } else {
-      // Normal OK message
-      message = OK_MESSAGES[Math.floor(Math.random() * OK_MESSAGES.length)];
-      state.consecutiveErrors = 0;
-    }
-
-    const timestamp = new Date().toISOString();
-    const logLine = `${timestamp} - ${message}`;
-    
-    // We can't actually append to pod logs easily, but we can log it locally
-    // In a real scenario, the application inside the pod would generate these logs
-    console.log(`📝 [${podName}] ${shouldError ? '❌' : '✅'} ${message}`);
-  }
-
-  /**
-   * Monitor and generate logs continuously
-   */
-  async startLogGeneration() {
-    console.log('\n🚀 Starting log generation (press Ctrl+C to stop)...\n');
-
-    const interval = setInterval(async () => {
-      for (const podName of POD_NAMES) {
-        if (this.podStates[podName]) {
-          await this.appendLogToPod(podName);
-        }
-      }
-    }, 3000); // Generate logs every 3 seconds
-
-    // Handle graceful shutdown
-    process.on('SIGINT', async () => {
-      console.log('\n\n🛑 Stopping simulation...');
-      clearInterval(interval);
-      console.log('\n💡 Namespace and pods are still running. To clean up:');
-      console.log(`   kubectl delete namespace ${this.namespace}`);
-      process.exit(0);
-    });
   }
 
   /**
@@ -280,8 +315,22 @@ spec:
     // Display status
     await this.displayPodStatus();
 
-    // Start log generation
-    await this.startLogGeneration();
+    console.log('\n✅ Pods are now running and generating logs!');
+    console.log('📊 The monitoring agent will detect errors in the pod logs.');
+    console.log('🔍 Check logs with: kubectl logs <pod-name> -n ' + this.namespace);
+    console.log('\n💡 To clean up: kubectl delete namespace ' + this.namespace);
+    console.log('\nPress Ctrl+C to exit (pods will keep running).\n');
+
+    // Keep script running
+    process.on('SIGINT', () => {
+      console.log('\n\n👋 Exiting simulator...');
+      console.log('💡 Pods are still running. To clean up:');
+      console.log(`   kubectl delete namespace ${this.namespace}`);
+      process.exit(0);
+    });
+
+    // Just keep the process alive
+    await new Promise(() => {});
   }
 }
 

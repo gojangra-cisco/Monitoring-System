@@ -61,6 +61,18 @@ class K8sMonitorAgent {
   }
 
   /**
+   * Check if namespace exists
+   */
+  async namespaceExists() {
+    try {
+      await execPromise(`kubectl get namespace ${this.namespace}`);
+      return true;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  /**
    * Get all pods in the namespace
    */
   async getPods() {
@@ -73,7 +85,7 @@ class K8sMonitorAgent {
     } catch (error) {
       if (error.message.includes('NotFound') || error.message.includes('not found')) {
         console.warn(`⚠️  Namespace '${this.namespace}' not found`);
-        return [];
+        return null; // Return null to indicate namespace doesn't exist
       }
       throw error;
     }
@@ -119,41 +131,44 @@ class K8sMonitorAgent {
   }
 
   /**
-   * Check if a pod is in error state
+   * Get pod status (Running, Failed, CrashLoopBackOff, etc.)
    */
-  isPodInError(pod) {
+  getPodStatus(pod) {
     const phase = pod.status.phase;
     
-    // Check for common error states
-    if (phase === 'Failed' || phase === 'Unknown') {
-      return true;
-    }
-
-    // Check container statuses
-    if (pod.status.containerStatuses) {
-      for (const container of pod.status.containerStatuses) {
-        const waiting = container.state.waiting;
-        const terminated = container.state.terminated;
-
-        if (waiting) {
-          const errorReasons = ['CrashLoopBackOff', 'ImagePullBackOff', 'ErrImagePull'];
-          if (errorReasons.includes(waiting.reason)) {
-            return true;
-          }
-        }
-
-        if (terminated && terminated.exitCode !== 0) {
-          return true;
-        }
-
-        if (!container.ready && container.state.running) {
-          // Container is running but not ready - might indicate issues
-          return true;
-        }
+    // Check container statuses for more specific status
+    if (pod.status.containerStatuses && pod.status.containerStatuses.length > 0) {
+      const container = pod.status.containerStatuses[0];
+      
+      // Check if waiting (CrashLoopBackOff, ImagePullBackOff, etc.)
+      if (container.state.waiting) {
+        return container.state.waiting.reason || phase;
+      }
+      
+      // Check if terminated
+      if (container.state.terminated) {
+        return container.state.terminated.reason || 'Terminated';
+      }
+      
+      // Running but not ready
+      if (container.state.running && !container.ready) {
+        return 'NotReady';
       }
     }
+    
+    return phase; // Running, Pending, Failed, etc.
+  }
 
-    return false;
+  /**
+   * Check if a pod is in error state
+   */
+  isPodInError(status) {
+    const errorStatuses = [
+      'Failed', 'Unknown', 'CrashLoopBackOff', 
+      'ImagePullBackOff', 'ErrImagePull', 
+      'Error', 'OOMKilled', 'Terminated'
+    ];
+    return errorStatuses.includes(status);
   }
 
   /**
@@ -163,8 +178,17 @@ class K8sMonitorAgent {
     try {
       const pods = await this.getPods();
 
+      // Check if namespace was deleted
+      if (pods === null) {
+        console.log(`🗑️  Namespace '${this.namespace}' was deleted. Notifying backend...`);
+        await this.notifyNamespaceDeleted();
+        return;
+      }
+
       if (pods.length === 0) {
         console.log(`📭 No pods found in namespace '${this.namespace}'`);
+        // Still send update to backend with empty pod list
+        await this.sendToBackend([]);
         return;
       }
 
@@ -172,39 +196,32 @@ class K8sMonitorAgent {
 
       for (const pod of pods) {
         const podName = pod.metadata.name;
-        const isError = this.isPodInError(pod);
-        const status = isError ? 'error' : 'running';
+        const podStatus = this.getPodStatus(pod);
+        const isError = this.isPodInError(podStatus);
 
         let errors = [];
 
-        // If pod is in error state, fetch and analyze logs
-        if (isError) {
-          console.log(`⚠️  Pod ${podName} is in error state, fetching logs...`);
-          const logs = await this.getPodLogs(podName);
-          errors = this.analyzeLogsForErrors(logs);
-          
-          // If no specific errors found in logs, add generic error
-          if (errors.length === 0) {
-            const phase = pod.status.phase;
-            const containerStatus = pod.status.containerStatuses?.[0];
-            const reason = containerStatus?.state?.waiting?.reason || 
-                          containerStatus?.state?.terminated?.reason || 
-                          phase;
-            errors.push({
-              message: `Pod in error state: ${reason}`,
-              type: reason
-            });
-          }
+        // If pod is in error state or has interesting logs, fetch and analyze
+        console.log(`🔍 Checking pod ${podName} (Status: ${podStatus})...`);
+        const logs = await this.getPodLogs(podName);
+        errors = this.analyzeLogsForErrors(logs);
+        
+        // If pod status indicates error but no log errors found, add status error
+        if (isError && errors.length === 0) {
+          errors.push({
+            message: `Pod status: ${podStatus}`,
+            type: podStatus
+          });
         }
 
         podData.push({
           name: podName,
-          status: status,
+          status: podStatus, // Send actual K8s status
           errors: errors.length > 0 ? errors : undefined
         });
 
-        const statusIcon = status === 'running' ? '✅' : '❌';
-        console.log(`${statusIcon} ${podName}: ${status}${errors.length > 0 ? ` (${errors.length} errors)` : ''}`);
+        const statusIcon = isError ? '❌' : '✅';
+        console.log(`${statusIcon} ${podName}: ${podStatus}${errors.length > 0 ? ` (${errors.length} errors)` : ''}`);
       }
 
       // Send data to backend
@@ -235,6 +252,27 @@ class K8sMonitorAgent {
         console.error(`❌ Cannot connect to backend at ${BACKEND_URL}`);
       } else {
         console.error('❌ Error sending data to backend:', error.message);
+      }
+    }
+  }
+
+  /**
+   * Notify backend that namespace was deleted
+   */
+  async notifyNamespaceDeleted() {
+    try {
+      const response = await axios.delete(`${BACKEND_URL}/api/namespaces/${this.namespace}`, {
+        timeout: 5000
+      });
+
+      if (response.data.success) {
+        console.log(`✅ Backend notified of namespace deletion`);
+      }
+    } catch (error) {
+      if (error.code === 'ECONNREFUSED') {
+        console.error(`❌ Cannot connect to backend at ${BACKEND_URL}`);
+      } else {
+        console.error('❌ Error notifying backend:', error.message);
       }
     }
   }
