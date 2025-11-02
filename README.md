@@ -1,6 +1,6 @@
 # Kubernetes Pod Monitoring System 🚀
 
-A complete hackathon project for automated Kubernetes pod monitoring with real-time error detection and visualization.
+A complete  project for automated Kubernetes pod monitoring with real-time error detection and visualization.
 
 ![Status](https://img.shields.io/badge/status-hackathon-blue)
 ![Node.js](https://img.shields.io/badge/node.js-18+-green)
@@ -22,7 +22,7 @@ This system automatically monitors Kubernetes pods across multiple namespaces us
 ## 📁 Project Structure
 
 ```
-hackathon/
+
 ├── backend/        # Node.js + Express + MySQL API
 ├── frontend/       # React.js + Tailwind CSS dashboard
 ├── agent/          # Node.js monitoring agent (executable)
@@ -259,7 +259,7 @@ node simulatePods.js my-namespace
 - `error_type`
 - `timestamp`
 
-## 🎯 Demo Flow for Hackathon
+## 🎯 Demo Flow
 
 ### Setup (5 minutes)
 1. Start MySQL database
@@ -412,41 +412,25 @@ Run without Node.js installed:
 
 ## 📄 License
 
-ISC License - Feel free to use for hackathons and learning!
+ISC License - Feel free to use and learning!
 
 ## 🤝 Contributing
 
-This is a hackathon project, but improvements are welcome:
+This is a sample project, but improvements are welcome:
 1. Fork the repository
 2. Create a feature branch
 3. Make your changes
 4. Submit a pull request
 
-## 🎉 Hackathon Tips
 
-### Presentation Points
-- ✅ Solves real DevOps problem
-- ✅ Full-stack implementation
-- ✅ Modern tech stack
-- ✅ Scalable architecture
-- ✅ Professional UI/UX
-- ✅ Working demo with test data
-
-### Demo Script
-1. Show problem statement
-2. Explain architecture
-3. Live demo with simulator
-4. Show multi-namespace capability
-5. Highlight error detection
-6. Show real-time updates
 
 ## 📞 Support
 
-For issues or questions during the hackathon:
+For issues or questions:
 1. Check component-specific READMEs
 2. Review troubleshooting section
 3. Check console/logs for errors
 
 ---
 
-**Built for Hackathon** | **Node.js + React + Kubernetes** | **2025**
+
