@@ -33,10 +33,16 @@ CREATE TABLE IF NOT EXISTS errors (
     pod_id INT NOT NULL,
     message TEXT NOT NULL,
     error_type VARCHAR(100),
+    priority ENUM('P0', 'P1', 'P2', 'P3') DEFAULT 'P2',
+    ai_resolution_status ENUM('not_started', 'analyzing', 'resolving', 'resolved', 'failed', 'manual_required') DEFAULT 'not_started',
+    ai_resolution_steps JSON,
+    resolved_at TIMESTAMP NULL,
     timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (pod_id) REFERENCES pods(id) ON DELETE CASCADE,
     INDEX idx_pod_id (pod_id),
-    INDEX idx_timestamp (timestamp)
+    INDEX idx_timestamp (timestamp),
+    INDEX idx_priority (priority),
+    INDEX idx_ai_status (ai_resolution_status)
 );
 
 -- Create user for monitoring application

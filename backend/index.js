@@ -111,12 +111,38 @@ app.post('/api/agent/update', async (req, res) => {
         [pod.name, namespaceId]
       ))[0][0].id;
 
-      // Insert errors if any
-      if (pod.errors && Array.isArray(pod.errors)) {
-        for (const error of pod.errors) {
+      // Insert errors if any - but only ONE error per pod per type (no duplicates)
+      if (pod.errors && Array.isArray(pod.errors) && pod.errors.length > 0) {
+        const error = pod.errors[0]; // Take only the FIRST error
+        
+        // Check if this exact error already exists for this pod
+        const [existingErrors] = await db.query(
+          'SELECT id FROM errors WHERE pod_id = ? AND error_type = ? AND message = ? AND timestamp > DATE_SUB(NOW(), INTERVAL 1 MINUTE)',
+          [podId, error.type || 'unknown', error.message]
+        );
+
+        // Only insert if this specific error doesn't exist in the last minute
+        if (existingErrors.length === 0) {
+          // Determine priority based on error message
+          let priority = 'P2'; // default
+          const errorMsg = error.message.toLowerCase();
+          if (errorMsg.includes('p0') || errorMsg.includes('critical') || errorMsg.includes('fatal') || errorMsg.includes('corruption')) {
+            priority = 'P0';
+          } else if (errorMsg.includes('p1') || errorMsg.includes('error:') || errorMsg.includes('image')) {
+            priority = 'P1';
+          }
+
+          // Determine AI resolution status
+          let aiStatus = 'not_started';
+          if (pod.name === 'dashboard' && errorMsg.includes('image')) {
+            aiStatus = 'analyzing'; // Will be updated by AI resolution process
+          } else if (pod.name === 'postgres' && errorMsg.includes('corruption')) {
+            aiStatus = 'analyzing'; // Will attempt to fix
+          }
+
           await db.query(
-            'INSERT INTO errors (pod_id, message, error_type) VALUES (?, ?, ?)',
-            [podId, error.message, error.type || 'unknown']
+            'INSERT INTO errors (pod_id, message, error_type, priority, ai_resolution_status) VALUES (?, ?, ?, ?, ?)',
+            [podId, error.message, error.type || 'unknown', priority, aiStatus]
           );
         }
       }
@@ -178,7 +204,7 @@ app.get('/api/namespaces/:id/pods', async (req, res) => {
 
 /**
  * GET /api/pods/:id/errors
- * Returns recent errors for a specific pod
+ * Returns recent errors for a specific pod with priority and AI status
  */
 app.get('/api/pods/:id/errors', async (req, res) => {
   const { id } = req.params;
@@ -186,7 +212,7 @@ app.get('/api/pods/:id/errors', async (req, res) => {
 
   try {
     const [errors] = await db.query(
-      `SELECT id, message, error_type, timestamp 
+      `SELECT id, message, error_type, priority, ai_resolution_status, ai_resolution_steps, resolved_at, timestamp 
        FROM errors 
        WHERE pod_id = ? 
        ORDER BY timestamp DESC 
@@ -264,7 +290,7 @@ app.delete('/api/namespaces/:name', async (req, res) => {
 
 /**
  * GET /api/errors/recent
- * Returns most recent errors across all namespaces
+ * Returns most recent errors across all namespaces with priorities
  */
 app.get('/api/errors/recent', async (req, res) => {
   const limit = req.query.limit || 20;
@@ -275,19 +301,58 @@ app.get('/api/errors/recent', async (req, res) => {
         e.id,
         e.message,
         e.error_type,
+        e.priority,
+        e.ai_resolution_status,
         e.timestamp,
         p.name as pod_name,
         n.name as namespace_name
        FROM errors e
        JOIN pods p ON e.pod_id = p.id
        JOIN namespaces n ON p.namespace_id = n.id
-       ORDER BY e.timestamp DESC
+       ORDER BY 
+         FIELD(e.priority, 'P0', 'P1', 'P2', 'P3'),
+         e.timestamp DESC
        LIMIT ?`,
       [parseInt(limit)]
     );
     res.json(errors);
   } catch (error) {
     console.error('Error fetching recent errors:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+/**
+ * PATCH /api/errors/:id/ai-status
+ * Update AI resolution status for an error
+ */
+app.patch('/api/errors/:id/ai-status', async (req, res) => {
+  const { id } = req.params;
+  const { status, steps } = req.body;
+
+  try {
+    const updates = ['ai_resolution_status = ?'];
+    const params = [status];
+
+    if (steps) {
+      updates.push('ai_resolution_steps = ?');
+      params.push(JSON.stringify(steps));
+    }
+
+    if (status === 'resolved') {
+      updates.push('resolved_at = NOW()');
+    }
+
+    params.push(id);
+
+    await db.query(
+      `UPDATE errors SET ${updates.join(', ')} WHERE id = ?`,
+      params
+    );
+
+    res.json({ success: true, message: 'AI status updated' });
+  } catch (error) {
+    console.error('Error updating AI status:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 });

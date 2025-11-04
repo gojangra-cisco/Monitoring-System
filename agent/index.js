@@ -9,7 +9,7 @@ const execPromise = util.promisify(exec);
 
 // Configuration
 const BACKEND_URL = process.env.BACKEND_URL || 'http://localhost:3000';
-const CHECK_INTERVAL = parseInt(process.env.CHECK_INTERVAL) || 10000; // 10 seconds
+const CHECK_INTERVAL = 300000; // 5 minutes
 
 // Error patterns to detect
 const ERROR_PATTERNS = [
